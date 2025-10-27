@@ -1,7 +1,21 @@
 use axum::{routing::get, Router};
 use surevoucher_configcore::{AppConfig, Loader};
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::atomic::{AtomicBool, Ordering}};
+use once_cell::sync::Lazy;
 use tracing::{info, warn};
+use tokio::signal;
+use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+
+#[cfg(unix)]
+use tokio::signal::unix::{signal as unix_signal, SignalKind};
+
+static READY: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
+
+static PROM_HANDLE: Lazy<PrometheusHandle> = Lazy::new(|| {
+    PrometheusBuilder::new()
+        .install_recorder()
+        .expect("install prometheus recorder")
+});
 
 #[cfg(feature = "tls")]
 mod tls;
@@ -17,61 +31,115 @@ impl WebServer {
     }
 
     pub async fn run(self) -> anyhow::Result<()> {
-        let app_addr: SocketAddr = format!("{}:{}", self.cfg.host, self.cfg.port).parse()?;
-        info!(%app_addr, "starting app server");
+        init_logging();
 
-        // Start health server on separate port if configured (defaults to 127.0.0.1:18080)
+        let app_addr: SocketAddr = format!("{}:{}", self.cfg.host, self.cfg.port).parse()?;
+
         let health_host = std::env::var("SUREVOUCHER__HEALTH_HOST").unwrap_or_else(|_| "127.0.0.1".into());
-        let health_port: u16 = std::env::var("SUREVOUCHER__HEALTH_PORT")
-            .ok()
-            .and_then(|s| s.parse::<u16>().ok())
-            .unwrap_or(18080);
+        let health_port: u16 = std::env::var("SUREVOUCHER__HEALTH_PORT").ok()
+            .and_then(|s| s.parse::<u16>().ok()).unwrap_or(18080);
         let health_addr: SocketAddr = format!("{}:{}", health_host, health_port).parse()?;
 
-        let health_app = Router::new().route("/healthz", get(|| async { "ok" }));
         let health_task = tokio::spawn(async move {
+            let health_app = health_router();
             match tokio::net::TcpListener::bind(health_addr).await {
                 Ok(listener) => {
-                    info!(%health_addr, "health server listening");
+                    info!(addr=%health_addr, "health server listening");
                     if let Err(e) = axum::serve(listener, health_app).await {
-                        warn!(error = %e, "health server terminated");
+                        warn!(error=%e, "health server terminated");
                     }
                 }
-                Err(e) => warn!(error = %e, %health_addr, "failed to bind health server"),
+                Err(e) => warn!(addr=%health_addr, error=%e, "failed to bind health server"),
             }
         });
 
-        // graceful shutdown (Ctrl+C)
-        let shutdown_signal = async {
-            tokio::signal::ctrl_c().await.expect("failed to install Ctrl+C handler");
-            info!("shutdown signal received");
-        };
+        let shutdown = shutdown_signal();
+
+        READY.store(true, Ordering::SeqCst);
 
         #[cfg(feature = "tls")]
-        if let Some(tls) = self.cfg.tls.clone() {
-            let listener = tls::make_tls_listener(&tls, app_addr).await?;
+        if let Some(tls_cfg) = self.cfg.tls.clone() {
+            let listener = tls::make_tls_listener(&tls_cfg, app_addr).await?;
             axum::serve(listener, self.router)
-                .with_graceful_shutdown(shutdown_signal)
+                .with_graceful_shutdown(shutdown)
                 .await?;
             health_task.abort();
             return Ok(());
         }
 
         let listener = tokio::net::TcpListener::bind(app_addr).await?;
+        info!(addr=%app_addr, "app server listening");
         axum::serve(listener, self.router)
-            .with_graceful_shutdown(shutdown_signal)
+            .with_graceful_shutdown(shutdown)
             .await?;
+
         health_task.abort();
         Ok(())
     }
 }
 
 pub fn basic_router() -> Router {
-    // Only core app routes here; health lives on the separate health server
-    Router::new().route("/", get(|| async { "ok" })) // a placeholder root handler for embedding apps
+    Router::new()
 }
 
 pub fn load_config() -> anyhow::Result<AppConfig> {
     let cfg = Loader::new("surevoucher", "SureVoucher", "SUREVOUCHER").load()?;
     Ok(cfg)
+}
+
+fn init_logging() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .json()
+        .flatten_event(true)
+        .with_current_span(true)
+        .with_span_list(true)
+        .try_init();
+}
+
+fn shutdown_signal() -> impl std::future::Future<Output = ()> {
+    async move {
+        let ctrl_c = async {
+            if let Err(e) = signal::ctrl_c().await {
+                warn!(error=%e, "failed to install Ctrl-C handler");
+            }
+        };
+        #[cfg(unix)]
+        {
+            let mut term = unix_signal(SignalKind::terminate()).expect("sigterm");
+            let mut quit = unix_signal(SignalKind::quit()).expect("sigquit");
+            let mut hup  = unix_signal(SignalKind::hangup()).expect("sighup");
+
+            tokio::select! {
+                _ = ctrl_c => {},
+                _ = term.recv() => {},
+                _ = quit.recv() => {},
+                _ = hup.recv()  => {},
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            ctrl_c.await;
+        }
+        info!("shutdown signal received");
+    }
+}
+
+fn health_router() -> Router {
+    use axum::response::IntoResponse;
+
+    async fn healthz() -> &'static str { "ok" }
+    async fn ready() -> &'static str {
+        if READY.load(Ordering::SeqCst) { "ok" } else { "starting" }
+    }
+
+    // Axum handler
+    async fn metrics() -> impl IntoResponse {
+        PROM_HANDLE.render()
+    }
+
+    Router::new()
+        .route("/healthz", get(healthz))
+        .route("/ready",   get(ready))
+        .route("/metrics", get(metrics))
 }

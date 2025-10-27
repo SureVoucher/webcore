@@ -22,3 +22,16 @@ cargo run --features tls
 ```
 
 Ensure `../configcore` is checked out alongside this repo, or change the dependency in `Cargo.toml`.
+
+## Health, Readiness, and Metrics
+
+- Health: `GET /healthz` (health port)
+- Readiness: `GET /ready` (becomes `ok` once app is ready)
+- Metrics: `GET /metrics` (Prometheus)
+
+### Ports
+- App: SUREVOUCHER__HOST / SUREVOUCHER__PORT
+- Health: SUREVOUCHER__HEALTH_HOST / SUREVOUCHER__HEALTH_PORT (default 127.0.0.1:18080)
+
+### Logs
+JSON via tracing-subscriber; set RUST_LOG, e.g. `RUST_LOG=info,surevoucher=debug`

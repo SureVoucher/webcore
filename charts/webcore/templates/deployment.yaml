@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "webcore.fullname" . }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "webcore.name" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "webcore.name" . }}
+    spec:
+      containers:
+        - name: webcore
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.app.port }}
+            - name: health
+              containerPort: {{ .Values.health.port }}
+          env:
+            - name: SUREVOUCHER__HOST
+              value: "{{ .Values.app.host }}"
+            - name: SUREVOUCHER__PORT
+              value: "{{ .Values.app.port }}"
+            - name: SUREVOUCHER__HEALTH_HOST
+              value: "{{ .Values.health.host }}"
+            - name: SUREVOUCHER__HEALTH_PORT
+              value: "{{ .Values.health.port }}"
+            - name: RUST_LOG
+              value: "info"
+          readinessProbe:
+            httpGet: { path: /ready,  port: health }
+            initialDelaySeconds: 2
+          livenessProbe:
+            httpGet: { path: /healthz, port: health }
+            initialDelaySeconds: 10

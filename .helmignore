@@ -1,0 +1,7 @@
+.git/
+.github/
+*.swp
+*.tmp
+*.bak
+target/
+Cargo.lock

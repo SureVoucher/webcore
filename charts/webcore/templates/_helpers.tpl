@@ -1,0 +1,2 @@
+{{- define "webcore.name" -}}{{- .Chart.Name | trunc 63 | trimSuffix "-" -}}{{- end -}}
+{{- define "webcore.fullname" -}}{{- printf "%s-%s" .Release.Name (include "webcore.name" .) | trunc 63 | trimSuffix "-" -}}{{- end -}}

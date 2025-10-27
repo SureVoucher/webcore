@@ -14,10 +14,12 @@ path = "src/main.rs"
 tls = ["rustls", "tokio-rustls", "rustls-pemfile", "tokio-stream"]
 
 [dependencies]
+once_cell = "1"
+metrics-exporter-prometheus = "0.17"
 axum = "0.8.6"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 anyhow = "1"
 
 surevoucher_configcore = { git = "https://github.com/surevoucher/configcore.git", branch = "main" }
