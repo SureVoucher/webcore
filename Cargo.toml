@@ -20,7 +20,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 anyhow = "1"
 
-surevoucher_configcore = { path = "../configcore" }
+surevoucher_configcore = { git = "https://github.com/surevoucher/configcore.git", branch = "main" }
 
 # TLS (optional)
 rustls = { version = "0.23", optional = true, default-features = false, features = ["ring"] }
