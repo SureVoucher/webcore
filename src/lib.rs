@@ -1,3 +1,5 @@
+// 1) Re-export axum so clients avoid version skew
+pub use axum;
 use axum::{routing::get, Router};
 use surevoucher_configcore::{AppConfig, Loader};
 use std::{net::SocketAddr, sync::atomic::{AtomicBool, Ordering}};
