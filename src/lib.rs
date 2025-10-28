@@ -5,6 +5,8 @@ use once_cell::sync::Lazy;
 use tracing::{info, warn};
 use tokio::signal;
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+use std::sync::{Arc, RwLock};
+
 
 #[cfg(unix)]
 use tokio::signal::unix::{signal as unix_signal, SignalKind};
@@ -78,10 +80,6 @@ impl WebServer {
     }
 }
 
-pub fn basic_router() -> Router {
-    Router::new()
-}
-
 pub fn load_config() -> anyhow::Result<AppConfig> {
     let cfg = Loader::new("surevoucher", "SureVoucher", "SUREVOUCHER").load()?;
     Ok(cfg)
@@ -142,4 +140,25 @@ fn health_router() -> Router {
         .route("/healthz", get(healthz))
         .route("/ready",   get(ready))
         .route("/metrics", get(metrics))
+}
+
+static GLOBAL_ROUTER: Lazy<Arc<RwLock<Router<()>>>> =
+    Lazy::new(|| Arc::new(RwLock::new(Router::new().route("/healthz", get(|| async { "ok" })))));
+
+pub fn basic_router() -> Router<()> {
+    GLOBAL_ROUTER.read().unwrap().clone()
+}
+
+/// Add a new route to the global router
+pub fn add_route(path: &'static str, route: axum::routing::MethodRouter<()>) {
+    let mut router = GLOBAL_ROUTER.write().unwrap();
+    *router = router.clone().route(path, route);
+}
+
+/// Exported run function for servers
+pub async fn run() -> anyhow::Result<()> {
+    let router = GLOBAL_ROUTER.read().unwrap().clone();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+    axum::serve(listener, router).await?;
+    Ok(())
 }
